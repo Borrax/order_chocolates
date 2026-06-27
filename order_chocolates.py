@@ -80,12 +80,16 @@ def set_field(driver, name, value):
         return
     try:
         el = driver.find_element(By.NAME, name)
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+        time.sleep(0.1)
         tag = el.tag_name.lower()
         if tag == "select":
-            sel = Select(el)
-            sel.select_by_value(str(value))
+            driver.execute_script(
+                "arguments[0].value = arguments[1]; arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
+                el, str(value)
+            )
         else:
-            el.clear()
+            driver.execute_script("arguments[0].value = '';", el)
             el.send_keys(str(value))
     except Exception as e:
         print(f"  Warning: could not set field '{name}': {e}")
@@ -154,6 +158,8 @@ def fill_checkout(driver, wait, info):
     for cb_id in ["agree_terms", "agree_terms_gdpr"]:
         try:
             cb = driver.find_element(By.ID, cb_id)
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", cb)
+            time.sleep(0.1)
             if not cb.is_selected():
                 driver.execute_script("arguments[0].click();", cb)
         except Exception as e:
