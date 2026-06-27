@@ -5,9 +5,15 @@ Orders "Шоколад Lindt Excellence тъмен 100 гр" from onegift.bg via
 ## Setup
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install selenium
+python -m venv .venv
 ```
+
+Then install dependencies:
+
+- **Windows:** `.venv\Scripts\pip install selenium`
+- **Linux/macOS:** `.venv/bin/pip install selenium`
+
+Or simply `pip install selenium` if pip is already in your PATH.
 
 Firefox + geckodriver must be installed (`geckodriver` in PATH).
 
