@@ -1,0 +1,12 @@
+# Secrets — never committed
+customer_info.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Misc
+*.log

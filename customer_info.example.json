@@ -1,0 +1,17 @@
+{
+  "billing_name": "Иван",
+  "billing_family_name": "Иванов",
+  "billing_phone": "0888000000",
+  "billing_email": "ivan@example.com",
+  "payment_type_id": "1",
+  "delivery_type_id": "1",
+  "delivery_name": "Иван",
+  "delivery_family_name": "Иванов",
+  "delivery_phone": "0888000000",
+  "delivery_address_line_1": "ул. Пример 1",
+  "delivery_address_line_2": "",
+  "delivery_region": "",
+  "delivery_city": "",
+  "delivery_postcode": "1000",
+  "user_comments": ""
+}
