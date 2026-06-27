@@ -111,11 +111,17 @@ def fill_checkout(driver, wait, info):
                   "billing_address_line_1", "billing_address_line_2", "billing_postcode"]:
         set_field(driver, field, info.get(field, ""))
 
-    # Delivery type dropdown
+    # Delivery type dropdown (custom JS widget — set via JS and fire change event)
     delivery_type = info.get("delivery_type_id", "1")
     try:
-        sel = Select(driver.find_element(By.NAME, "delivery_type_id"))
-        sel.select_by_value(str(delivery_type))
+        driver.execute_script(
+            """
+            var sel = document.querySelector('select[name="delivery_type_id"]');
+            sel.value = arguments[0];
+            sel.dispatchEvent(new Event('change', {bubbles: true}));
+            """,
+            str(delivery_type),
+        )
         time.sleep(1)  # wait for dependent fields to appear
     except Exception as e:
         print(f"  Warning: could not set delivery type: {e}")
