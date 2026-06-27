@@ -81,7 +81,6 @@ def set_field(driver, name, value):
     try:
         el = driver.find_element(By.NAME, name)
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-        time.sleep(0.1)
         tag = el.tag_name.lower()
         if tag == "select":
             driver.execute_script(
@@ -89,8 +88,11 @@ def set_field(driver, name, value):
                 el, str(value)
             )
         else:
-            driver.execute_script("arguments[0].value = '';", el)
-            el.send_keys(str(value))
+            # Set value via JS to bypass visibility/keyboard-reachability restrictions
+            driver.execute_script(
+                "arguments[0].value = arguments[1]; arguments[0].dispatchEvent(new Event('input', {bubbles:true})); arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
+                el, str(value)
+            )
     except Exception as e:
         print(f"  Warning: could not set field '{name}': {e}")
 
