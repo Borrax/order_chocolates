@@ -23,12 +23,12 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import Select, WebDriverWait
+from selenium.webdriver.support.ui import WebDriverWait
 
 PRODUCT_URL = "https://www.onegift.bg/productbg/9"
-CART_URL = "https://www.onegift.bg/cartbg/"
 CHECKOUT_URL = "https://www.onegift.bg/checkoutbg/"
 CUSTOMER_INFO_FILE = os.path.join(os.path.dirname(__file__), "customer_info.json")
+SCREENSHOT_PATH = os.path.join(os.path.dirname(__file__), "order_screenshot.png")
 DEFAULT_AMOUNT = 10
 WAIT_TIMEOUT = 15
 
@@ -60,8 +60,23 @@ def dismiss_cookie_banner(driver, wait):
         pass
 
 
+def js_set(driver, name, value):
+    """Set a field's value via JS and fire input+change events."""
+    driver.execute_script(
+        """
+        var el = document.querySelector('[name="' + arguments[0] + '"]');
+        if (el) {
+            el.value = arguments[1];
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+        }
+        """,
+        name, str(value)
+    )
+
+
 def add_to_cart(driver, wait, amount):
-    print(f"Opening product page...")
+    print("Opening product page...")
     driver.get(PRODUCT_URL)
     dismiss_cookie_banner(driver, wait)
 
@@ -69,32 +84,9 @@ def add_to_cart(driver, wait, amount):
     qty_input.clear()
     qty_input.send_keys(str(amount))
 
-    add_btn = driver.find_element(By.ID, "buttonAddToCart")
-    add_btn.click()
+    driver.find_element(By.ID, "buttonAddToCart").click()
     print(f"Added {amount} chocolates to cart.")
     time.sleep(2)
-
-
-def set_field(driver, name, value):
-    if not value:
-        return
-    try:
-        el = driver.find_element(By.NAME, name)
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-        tag = el.tag_name.lower()
-        if tag == "select":
-            driver.execute_script(
-                "arguments[0].value = arguments[1]; arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
-                el, str(value)
-            )
-        else:
-            # Set value via JS to bypass visibility/keyboard-reachability restrictions
-            driver.execute_script(
-                "arguments[0].value = arguments[1]; arguments[0].dispatchEvent(new Event('input', {bubbles:true})); arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
-                el, str(value)
-            )
-    except Exception as e:
-        print(f"  Warning: could not set field '{name}': {e}")
 
 
 def fill_checkout(driver, wait, info):
@@ -103,21 +95,22 @@ def fill_checkout(driver, wait, info):
     wait.until(EC.presence_of_element_located((By.ID, "buttonCheckout")))
     dismiss_cookie_banner(driver, wait)
 
-    # Payment type radio
+    # --- Payment type ---
     payment_id = info.get("payment_type_id", "1")
     try:
         radio = driver.find_element(By.CSS_SELECTOR, f"input[name='payment_type_id'][value='{payment_id}']")
         if not radio.is_selected():
             driver.execute_script("arguments[0].click();", radio)
     except Exception as e:
-        print(f"  Warning: could not select payment type: {e}")
+        print(f"  Warning: payment type: {e}")
 
-    # Billing fields
-    for field in ["billing_name", "billing_family_name", "billing_phone", "billing_email",
-                  "billing_address_line_1", "billing_address_line_2", "billing_postcode"]:
-        set_field(driver, field, info.get(field, ""))
+    # --- Billing fields ---
+    for field in ["billing_name", "billing_family_name", "billing_phone", "billing_email"]:
+        val = info.get(field, "")
+        if val:
+            js_set(driver, field, val)
 
-    # Delivery type dropdown (custom JS widget — set via JS and fire change event)
+    # --- Delivery type (Select2 widget) ---
     delivery_type = info.get("delivery_type_id", "1")
     try:
         driver.execute_script(
@@ -125,14 +118,20 @@ def fill_checkout(driver, wait, info):
             var sel = document.querySelector('select[name="delivery_type_id"]');
             sel.value = arguments[0];
             sel.dispatchEvent(new Event('change', {bubbles: true}));
+            // Also trigger select2 if present
+            if (window.jQuery) {
+                jQuery('select[name="delivery_type_id"]').val(arguments[0]).trigger('change');
+            }
             """,
             str(delivery_type),
         )
-        time.sleep(1)  # wait for dependent fields to appear
+        # Wait for the delivery information section to appear
+        wait.until(EC.visibility_of_element_located((By.ID, "deliveryInformation")))
     except Exception as e:
-        print(f"  Warning: could not set delivery type: {e}")
+        print(f"  Warning: delivery type: {e}")
+        time.sleep(1)
 
-    # Delivery region — set value then trigger the site's own AJAX city loader
+    # --- Delivery region (Select2, triggers AJAX city load) ---
     delivery_region = info.get("delivery_region", "")
     if delivery_region:
         try:
@@ -141,17 +140,23 @@ def fill_checkout(driver, wait, info):
                 var sel = document.querySelector('select[name="delivery_region"]');
                 sel.value = arguments[0];
                 sel.dispatchEvent(new Event('change', {bubbles: true}));
+                if (window.jQuery) {
+                    jQuery('select[name="delivery_region"]').val(arguments[0]).trigger('change');
+                }
                 if (typeof ajaxPutDeliveryCitiesByRegion === 'function') {
                     ajaxPutDeliveryCitiesByRegion(arguments[0]);
                 }
                 """,
                 str(delivery_region),
             )
-            time.sleep(2)  # wait for AJAX city population
+            # Wait for city dropdown to populate (more than the placeholder option)
+            print("  Waiting for cities to load...")
+            wait.until(lambda d: len(d.find_element(By.CSS_SELECTOR, 'select[name="delivery_city"]').find_elements(By.TAG_NAME, "option")) > 1)
         except Exception as e:
-            print(f"  Warning: could not set delivery region: {e}")
+            print(f"  Warning: delivery region: {e}")
+            time.sleep(2)
 
-    # Delivery city — set after AJAX has populated the options
+    # --- Delivery city ---
     delivery_city = info.get("delivery_city", "")
     if delivery_city:
         try:
@@ -160,19 +165,24 @@ def fill_checkout(driver, wait, info):
                 var sel = document.querySelector('select[name="delivery_city"]');
                 sel.value = arguments[0];
                 sel.dispatchEvent(new Event('change', {bubbles: true}));
+                if (window.jQuery) {
+                    jQuery('select[name="delivery_city"]').val(arguments[0]).trigger('change');
+                }
                 """,
                 str(delivery_city),
             )
             time.sleep(0.5)
         except Exception as e:
-            print(f"  Warning: could not set delivery city: {e}")
+            print(f"  Warning: delivery city: {e}")
 
-    # Delivery address fields
+    # --- Delivery contact + address fields (set last, after region/city settle) ---
     for field in ["delivery_name", "delivery_family_name", "delivery_phone",
                   "delivery_address_line_1", "delivery_address_line_2", "delivery_postcode"]:
-        set_field(driver, field, info.get(field, ""))
+        val = info.get(field, "")
+        if val:
+            js_set(driver, field, val)
 
-    # Comments (only if present)
+    # --- Optional comment ---
     comments = info.get("user_comments", "")
     if comments:
         try:
@@ -182,28 +192,31 @@ def fill_checkout(driver, wait, info):
             time.sleep(0.3)
         except Exception:
             pass
-        set_field(driver, "user_comments", comments)
+        js_set(driver, "user_comments", comments)
 
-    # Accept the two terms checkboxes
+    # --- Consent checkboxes ---
     for cb_id in ["agree_terms", "agree_terms_gdpr"]:
         try:
             cb = driver.find_element(By.ID, cb_id)
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", cb)
-            time.sleep(0.1)
             if not cb.is_selected():
                 driver.execute_script("arguments[0].click();", cb)
         except Exception as e:
-            print(f"  Warning: could not tick {cb_id}: {e}")
+            print(f"  Warning: checkbox {cb_id}: {e}")
 
-    print("Form filled. Submitting order...")
-    submit = driver.find_element(By.ID, "buttonCheckout")
-    submit.click()
+    # Screenshot BEFORE submit so you can verify the form
+    pre_path = os.path.join(os.path.dirname(__file__), "pre_submit_screenshot.png")
+    driver.save_screenshot(pre_path)
+    print(f"Pre-submit screenshot saved to {pre_path}")
+
+    print("Submitting order...")
+    driver.find_element(By.ID, "buttonCheckout").click()
     time.sleep(3)
     print(f"Order submitted. Final URL: {driver.current_url}")
 
-    screenshot_path = os.path.join(os.path.dirname(__file__), "order_screenshot.png")
-    driver.save_screenshot(screenshot_path)
-    print(f"Screenshot saved to {screenshot_path}")
+    driver.save_screenshot(SCREENSHOT_PATH)
+    print(f"Post-submit screenshot saved to {SCREENSHOT_PATH}")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Order Lindt chocolates from onegift.bg")
