@@ -132,14 +132,42 @@ def fill_checkout(driver, wait, info):
     except Exception as e:
         print(f"  Warning: could not set delivery type: {e}")
 
-    # Delivery region / city dropdowns (if set in info)
-    for field in ["delivery_region", "delivery_city"]:
-        val = info.get(field, "")
-        if val:
-            set_field(driver, field, val)
-            time.sleep(0.5)
+    # Delivery region — set value then trigger the site's own AJAX city loader
+    delivery_region = info.get("delivery_region", "")
+    if delivery_region:
+        try:
+            driver.execute_script(
+                """
+                var sel = document.querySelector('select[name="delivery_region"]');
+                sel.value = arguments[0];
+                sel.dispatchEvent(new Event('change', {bubbles: true}));
+                if (typeof ajaxPutDeliveryCitiesByRegion === 'function') {
+                    ajaxPutDeliveryCitiesByRegion(arguments[0]);
+                }
+                """,
+                str(delivery_region),
+            )
+            time.sleep(2)  # wait for AJAX city population
+        except Exception as e:
+            print(f"  Warning: could not set delivery region: {e}")
 
-    # Delivery contact & address fields
+    # Delivery city — set after AJAX has populated the options
+    delivery_city = info.get("delivery_city", "")
+    if delivery_city:
+        try:
+            driver.execute_script(
+                """
+                var sel = document.querySelector('select[name="delivery_city"]');
+                sel.value = arguments[0];
+                sel.dispatchEvent(new Event('change', {bubbles: true}));
+                """,
+                str(delivery_city),
+            )
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"  Warning: could not set delivery city: {e}")
+
+    # Delivery address fields
     for field in ["delivery_name", "delivery_family_name", "delivery_phone",
                   "delivery_address_line_1", "delivery_address_line_2", "delivery_postcode"]:
         set_field(driver, field, info.get(field, ""))
