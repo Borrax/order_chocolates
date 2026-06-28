@@ -29,6 +29,7 @@ PRODUCT_URL = "https://www.onegift.bg/productbg/9"
 CHECKOUT_URL = "https://www.onegift.bg/checkoutbg/"
 CUSTOMER_INFO_FILE = os.path.join(os.path.dirname(__file__), "customer_info.json")
 SCREENSHOT_PATH = os.path.join(os.path.dirname(__file__), "order_screenshot.png")
+PRE_SCREENSHOT_PATH = os.path.join(os.path.dirname(__file__), "pre_submit_screenshot.png")
 DEFAULT_AMOUNT = 10
 WAIT_TIMEOUT = 15
 
@@ -54,14 +55,15 @@ def make_driver():
 
 def dismiss_cookie_banner(driver, wait):
     try:
-        btn = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "button.cc-dismiss, .cc-btn.cc-dismiss")))
+        btn = wait.until(EC.presence_of_element_located(
+            (By.CSS_SELECTOR, "button.cc-dismiss, .cc-btn.cc-dismiss")))
         btn.click()
     except Exception:
         pass
 
 
 def js_set(driver, name, value):
-    """Set a field's value via JS and fire input+change events."""
+    """Set a plain input value via JS and fire input+change events."""
     driver.execute_script(
         """
         var el = document.querySelector('[name="' + arguments[0] + '"]');
@@ -73,6 +75,63 @@ def js_set(driver, name, value):
         """,
         name, str(value)
     )
+
+
+def select2_set(driver, wait, select_name, value):
+    """
+    Drive a Select2 widget by clicking through its UI.
+    Looks up the option text for `value` in the underlying <select>,
+    opens the dropdown by clicking the Select2 trigger, then clicks the matching option.
+    Returns True on success.
+    """
+    # Resolve option text from the hidden <select>
+    option_text = driver.execute_script(
+        """
+        var sel = document.querySelector('select[name="' + arguments[0] + '"]');
+        if (!sel) return null;
+        var opt = Array.from(sel.options).find(function(o) { return o.value == arguments[1]; });
+        return opt ? opt.textContent.trim() : null;
+        """,
+        select_name, str(value)
+    )
+    if not option_text:
+        print(f"  Warning: no option value='{value}' found in select '{select_name}'")
+        return False
+
+    # Click the Select2 trigger (the span that sits next to the hidden <select>)
+    clicked = driver.execute_script(
+        """
+        var sel = document.querySelector('select[name="' + arguments[0] + '"]');
+        if (!sel) return false;
+        // Select2 appends its container right after the <select>
+        var next = sel.nextElementSibling;
+        if (next && next.classList.contains('select2-container')) {
+            var trigger = next.querySelector('.select2-selection');
+            if (trigger) { trigger.click(); return true; }
+        }
+        return false;
+        """,
+        select_name
+    )
+    if not clicked:
+        print(f"  Warning: could not find Select2 trigger for '{select_name}'")
+        return False
+
+    # Wait for the dropdown list to appear
+    try:
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, '.select2-results__option')))
+    except Exception:
+        print(f"  Warning: Select2 dropdown did not open for '{select_name}'")
+        return False
+
+    # Click the matching option
+    for opt in driver.find_elements(By.CSS_SELECTOR, '.select2-results__option'):
+        if opt.text.strip() == option_text:
+            opt.click()
+            return True
+
+    print(f"  Warning: option '{option_text}' not found in open Select2 dropdown")
+    return False
 
 
 def add_to_cart(driver, wait, amount):
@@ -95,10 +154,11 @@ def fill_checkout(driver, wait, info):
     wait.until(EC.presence_of_element_located((By.ID, "buttonCheckout")))
     dismiss_cookie_banner(driver, wait)
 
-    # --- Payment type ---
+    # --- Payment type radio ---
     payment_id = info.get("payment_type_id", "1")
     try:
-        radio = driver.find_element(By.CSS_SELECTOR, f"input[name='payment_type_id'][value='{payment_id}']")
+        radio = driver.find_element(
+            By.CSS_SELECTOR, f"input[name='payment_type_id'][value='{payment_id}']")
         if not radio.is_selected():
             driver.execute_script("arguments[0].click();", radio)
     except Exception as e:
@@ -110,72 +170,35 @@ def fill_checkout(driver, wait, info):
         if val:
             js_set(driver, field, val)
 
-    # --- Delivery type (Select2 widget) ---
+    # --- Delivery type (Select2) ---
     delivery_type = info.get("delivery_type_id", "1")
-    try:
-        driver.execute_script(
-            """
-            var sel = document.querySelector('select[name="delivery_type_id"]');
-            sel.value = arguments[0];
-            sel.dispatchEvent(new Event('change', {bubbles: true}));
-            // Also trigger select2 if present
-            if (window.jQuery) {
-                jQuery('select[name="delivery_type_id"]').val(arguments[0]).trigger('change');
-            }
-            """,
-            str(delivery_type),
-        )
-        # Wait for the delivery information section to appear
-        wait.until(EC.visibility_of_element_located((By.ID, "deliveryInformation")))
-    except Exception as e:
-        print(f"  Warning: delivery type: {e}")
-        time.sleep(1)
+    print(f"  Setting delivery type to {delivery_type}...")
+    select2_set(driver, wait, "delivery_type_id", delivery_type)
+    time.sleep(1)
 
     # --- Delivery region (Select2, triggers AJAX city load) ---
     delivery_region = info.get("delivery_region", "")
     if delivery_region:
+        print(f"  Setting delivery region to {delivery_region}...")
+        select2_set(driver, wait, "delivery_region", delivery_region)
+        # Wait for city dropdown to populate
+        print("  Waiting for cities to load...")
         try:
-            driver.execute_script(
-                """
-                var sel = document.querySelector('select[name="delivery_region"]');
-                sel.value = arguments[0];
-                sel.dispatchEvent(new Event('change', {bubbles: true}));
-                if (window.jQuery) {
-                    jQuery('select[name="delivery_region"]').val(arguments[0]).trigger('change');
-                }
-                if (typeof ajaxPutDeliveryCitiesByRegion === 'function') {
-                    ajaxPutDeliveryCitiesByRegion(arguments[0]);
-                }
-                """,
-                str(delivery_region),
-            )
-            # Wait for city dropdown to populate (more than the placeholder option)
-            print("  Waiting for cities to load...")
-            wait.until(lambda d: len(d.find_element(By.CSS_SELECTOR, 'select[name="delivery_city"]').find_elements(By.TAG_NAME, "option")) > 1)
-        except Exception as e:
-            print(f"  Warning: delivery region: {e}")
-            time.sleep(2)
+            wait.until(lambda d: len(
+                d.find_element(By.CSS_SELECTOR, 'select[name="delivery_city"]')
+                 .find_elements(By.TAG_NAME, "option")
+            ) > 1)
+        except Exception:
+            print("  Warning: city dropdown did not populate in time")
 
-    # --- Delivery city ---
+    # --- Delivery city (Select2) ---
     delivery_city = info.get("delivery_city", "")
     if delivery_city:
-        try:
-            driver.execute_script(
-                """
-                var sel = document.querySelector('select[name="delivery_city"]');
-                sel.value = arguments[0];
-                sel.dispatchEvent(new Event('change', {bubbles: true}));
-                if (window.jQuery) {
-                    jQuery('select[name="delivery_city"]').val(arguments[0]).trigger('change');
-                }
-                """,
-                str(delivery_city),
-            )
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"  Warning: delivery city: {e}")
+        print(f"  Setting delivery city to {delivery_city}...")
+        select2_set(driver, wait, "delivery_city", delivery_city)
+        time.sleep(0.5)
 
-    # --- Delivery contact + address fields (set last, after region/city settle) ---
+    # --- Delivery contact + address fields ---
     for field in ["delivery_name", "delivery_family_name", "delivery_phone",
                   "delivery_address_line_1", "delivery_address_line_2", "delivery_postcode"]:
         val = info.get(field, "")
@@ -204,13 +227,13 @@ def fill_checkout(driver, wait, info):
         except Exception as e:
             print(f"  Warning: checkbox {cb_id}: {e}")
 
-    # Screenshot BEFORE submit — expand window to full page height so entire form is visible
+    # --- Pre-submit screenshot (full page height) ---
     full_height = driver.execute_script("return document.body.scrollHeight")
     driver.set_window_size(1280, full_height)
-    pre_path = os.path.join(os.path.dirname(__file__), "pre_submit_screenshot.png")
-    driver.save_screenshot(pre_path)
-    print(f"Pre-submit screenshot saved to {pre_path}")
+    driver.save_screenshot(PRE_SCREENSHOT_PATH)
+    print(f"Pre-submit screenshot saved to {PRE_SCREENSHOT_PATH}")
 
+    # --- Submit ---
     print("Submitting order...")
     driver.find_element(By.ID, "buttonCheckout").click()
     time.sleep(3)
