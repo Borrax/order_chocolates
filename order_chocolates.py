@@ -48,7 +48,11 @@ def load_customer_info():
 def make_driver():
     opts = Options()
     opts.add_argument("--headless")
-    opts.binary_location = "/snap/firefox/current/usr/lib/firefox/firefox"
+    # On Linux with snap Firefox the wrapper script isn't a real binary;
+    # point Selenium at the real executable. On Windows/macOS skip this.
+    snap_firefox = "/snap/firefox/current/usr/lib/firefox/firefox"
+    if os.path.exists(snap_firefox):
+        opts.binary_location = snap_firefox
     driver = webdriver.Firefox(options=opts)
     driver.set_window_size(1280, 900)
     return driver
