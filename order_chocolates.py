@@ -48,6 +48,7 @@ def load_customer_info():
 def make_driver():
     opts = Options()
     opts.add_argument("--headless")
+    opts.binary_location = "/snap/firefox/current/usr/lib/firefox/firefox"
     driver = webdriver.Firefox(options=opts)
     driver.set_window_size(1280, 900)
     return driver
@@ -121,38 +122,113 @@ def fill_checkout(driver, wait, info):
         print(f"  Warning: payment type: {e}")
 
     # --- Billing fields ---
+    # Note: the checkout JS validation reads billing_region, billing_city,
+    # billing_address_line_1 and billing_postcode for delivery validation too.
+    # So we fill billing address fields with the delivery address values.
     for field in ["billing_name", "billing_family_name", "billing_phone", "billing_email"]:
         val = info.get(field, "")
         if val:
             js_set(driver, field, val)
 
-    # --- Delivery type (Select2) ---
+    # Mirror delivery address into billing address fields (required by site's JS validation)
+    addr_map = {
+        "billing_address_line_1": info.get("delivery_address_line_1", "") or info.get("billing_address_line_1", ""),
+        "billing_address_line_2": info.get("delivery_address_line_2", "") or info.get("billing_address_line_2", ""),
+        "billing_postcode":       info.get("delivery_postcode", "") or info.get("billing_postcode", ""),
+    }
+    for field, val in addr_map.items():
+        if val:
+            js_set(driver, field, val)
+
+    # Set all delivery dropdowns atomically via JS — no events fired until all values
+    # are in place, because each select's change handler resets sibling selects.
     delivery_type = info.get("delivery_type_id", "1")
-    print(f"  Setting delivery type to {delivery_type}...")
-    select2_set(driver, "delivery_type_id", delivery_type)
-    time.sleep(1)
-
-    # --- Delivery region (Select2, then explicitly call AJAX city loader) ---
     delivery_region = info.get("delivery_region", "")
-    if delivery_region:
-        print(f"  Setting delivery region to {delivery_region}...")
-        select2_set(driver, "delivery_region", delivery_region)
-        driver.execute_script("ajaxPutDeliveryCitiesByRegion(arguments[0]);", str(delivery_region))
-        print("  Waiting for cities to load...")
-        try:
-            wait.until(lambda d: len(
-                d.find_element(By.CSS_SELECTOR, 'select[name="delivery_city"]')
-                 .find_elements(By.TAG_NAME, "option")
-            ) > 1)
-        except Exception:
-            print("  Warning: city dropdown did not populate in time")
-
-    # --- Delivery city (Select2) ---
     delivery_city = info.get("delivery_city", "")
-    if delivery_city:
-        print(f"  Setting delivery city to {delivery_city}...")
-        select2_set(driver, "delivery_city", delivery_city)
-        time.sleep(0.5)
+
+    print(f"  Setting delivery type={delivery_type} region={delivery_region} city={delivery_city}...")
+
+    if delivery_region:
+        # Pre-populate city options via AJAX, then set all three values silently
+        driver.execute_script(
+            """
+            var deliveryType = arguments[0];
+            var deliveryRegion = arguments[1];
+            var deliveryCity = arguments[2];
+
+            // Set delivery type and region silently (no change events — handlers reset siblings)
+            jQuery('select[name="delivery_type_id"]').val(deliveryType);
+            jQuery('select[name="delivery_region"]').val(deliveryRegion);
+
+            // Load city options via AJAX, then set city, then fire the delivery type change
+            jQuery.ajax({
+                type: 'POST',
+                url: '/get-cities',
+                data: 'region=' + deliveryRegion,
+                dataType: 'json',
+                success: function(response) {
+                    var $city = jQuery('select[name="delivery_city"]');
+                    $city.empty().append('<option value="">Моля изберете Град</option>');
+                    jQuery.each(response, function(i, item) {
+                        $city.append('<option value="' + item.id + '">' + item.city_type + ' ' + item.name + '</option>');
+                    });
+                    $city.val(deliveryCity);
+                    // Also populate billing selects — JS validation and server read from those
+                    var $billingRegion = jQuery('select[name="billing_region"]');
+                    var $billingCity = jQuery('select[name="billing_city"]');
+                    $billingRegion.val(deliveryRegion);
+                    // Copy city options into billing_city and set the same value
+                    $billingCity.empty().append('<option value="">Моля изберете Град</option>');
+                    jQuery.each(response, function(i, item) {
+                        $billingCity.append('<option value="' + item.id + '">' + item.city_type + ' ' + item.name + '</option>');
+                    });
+                    $billingCity.val(deliveryCity);
+                    // Fire delivery_type change last — it shows address section but resets region/city
+                    // We set region/city again immediately after to counteract
+                    jQuery('select[name="delivery_type_id"]').trigger('change.select2').trigger('change');
+                    jQuery('select[name="delivery_region"]').val(deliveryRegion);
+                    $city.val(deliveryCity);
+                    window._deliveryReady = true;
+                }
+            });
+            """,
+            str(delivery_type), str(delivery_region), str(delivery_city)
+        )
+        print("  Waiting for city AJAX and delivery setup...")
+        wait.until(lambda d: d.execute_script("return window._deliveryReady === true;"))
+        # slideDown animation runs for ~400ms after the change event; let it finish,
+        # then re-assert region and city which get cleared by the re-init inside the handler
+        time.sleep(0.6)
+        driver.execute_script(
+            """
+            jQuery('select[name="delivery_region"]').val(arguments[0]);
+            jQuery('select[name="delivery_city"]').val(arguments[1]);
+            jQuery('select[name="billing_region"]').val(arguments[0]);
+            jQuery('select[name="billing_city"]').val(arguments[1]);
+            """,
+            str(delivery_region), str(delivery_city)
+        )
+        # Verify billing_city actually took (options must exist in the select)
+        billing_city_val = driver.execute_script(
+            "return jQuery('select[name=\"billing_city\"]').val();"
+        )
+        if not billing_city_val:
+            # Options may have been cleared by the re-init; copy them from delivery_city select
+            driver.execute_script(
+                """
+                var $src = jQuery('select[name="delivery_city"]');
+                var $dst = jQuery('select[name="billing_city"]');
+                $dst.empty();
+                $src.find('option').each(function() {
+                    $dst.append(jQuery(this).clone());
+                });
+                $dst.val(arguments[0]);
+                """,
+                str(delivery_city)
+            )
+    else:
+        select2_set(driver, "delivery_type_id", delivery_type)
+        time.sleep(1)
 
     # --- Delivery contact + address fields ---
     for field in ["delivery_name", "delivery_family_name", "delivery_phone",
@@ -183,17 +259,44 @@ def fill_checkout(driver, wait, info):
         except Exception as e:
             print(f"  Warning: checkbox {cb_id}: {e}")
 
-    # --- Pre-submit screenshot (full page height) ---
+    # Debug: read back actual values from the DOM
+    debug = driver.execute_script("""
+        return {
+            delivery_type: document.querySelector('select[name="delivery_type_id"]').value,
+            delivery_region: document.querySelector('select[name="delivery_region"]').value,
+            billing_region: document.querySelector('select[name="billing_region"]').value,
+            delivery_city: document.querySelector('select[name="delivery_city"]').value,
+            billing_city: document.querySelector('select[name="billing_city"]').value,
+            address1: document.querySelector('input[name="delivery_address_line_1"]').value,
+            billing_address1: document.querySelector('input[name="billing_address_line_1"]').value,
+            postcode: document.querySelector('input[name="delivery_postcode"]').value,
+            billing_postcode: document.querySelector('input[name="billing_postcode"]').value,
+        };
+    """)
+    print(f"  DOM values before screenshot: {debug}")
+
+    # --- Submit (JS click to bypass any overlapping chat widget iframes) ---
+    print("Submitting order...")
+    driver.execute_script("document.getElementById('buttonCheckout').click();")
+    time.sleep(3)
+    print(f"Order submitted. Final URL: {driver.current_url}")
+
+    # Click "ФИНАЛИЗИРАЙ ПОРЪЧКАТА" on the confirmation page to place the order
+    try:
+        finalize_btn = wait.until(EC.presence_of_element_located(
+            (By.CSS_SELECTOR, "button.submitBtn:not(#buttonCheckout), a.submitBtn")
+        ))
+        driver.execute_script("arguments[0].click();", finalize_btn)
+        time.sleep(3)
+        print(f"Order finalized. Final URL: {driver.current_url}")
+    except Exception as e:
+        print(f"  Warning: could not click finalize button: {e}")
+
+    # --- Screenshots (resize after submit so it doesn't interfere with form state) ---
     full_height = driver.execute_script("return document.body.scrollHeight")
     driver.set_window_size(1280, full_height)
     driver.save_screenshot(PRE_SCREENSHOT_PATH)
     print(f"Pre-submit screenshot saved to {PRE_SCREENSHOT_PATH}")
-
-    # --- Submit ---
-    print("Submitting order...")
-    driver.find_element(By.ID, "buttonCheckout").click()
-    time.sleep(3)
-    print(f"Order submitted. Final URL: {driver.current_url}")
 
     driver.save_screenshot(SCREENSHOT_PATH)
     print(f"Post-submit screenshot saved to {SCREENSHOT_PATH}")
