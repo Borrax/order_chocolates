@@ -1,6 +1,9 @@
 # Secrets — never committed
 customer_info.json
 
+# Screenshot output
+order_screenshot.png
+
 # Python
 __pycache__/
 *.pyc

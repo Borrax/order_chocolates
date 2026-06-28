@@ -173,6 +173,9 @@ def fill_checkout(driver, wait, info):
     time.sleep(3)
     print(f"Order submitted. Final URL: {driver.current_url}")
 
+    screenshot_path = os.path.join(os.path.dirname(__file__), "order_screenshot.png")
+    driver.save_screenshot(screenshot_path)
+    print(f"Screenshot saved to {screenshot_path}")
 
 def main():
     parser = argparse.ArgumentParser(description="Order Lindt chocolates from onegift.bg")
