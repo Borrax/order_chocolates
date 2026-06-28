@@ -78,10 +78,13 @@ def js_set(driver, name, value):
 
 
 def select2_set(driver, name, value):
-    """Set a Select2 dropdown via jQuery's Select2 API (.val + trigger change.select2)."""
+    """Set a Select2 dropdown: update Select2 display AND fire plain change for site listeners."""
     driver.execute_script(
         """
-        jQuery('select[name="' + arguments[0] + '"]').val(arguments[1]).trigger('change.select2');
+        jQuery('select[name="' + arguments[0] + '"]')
+            .val(arguments[1])
+            .trigger('change.select2')
+            .trigger('change');
         """,
         name, str(value)
     )
