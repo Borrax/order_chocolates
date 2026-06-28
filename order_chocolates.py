@@ -204,7 +204,9 @@ def fill_checkout(driver, wait, info):
         except Exception as e:
             print(f"  Warning: checkbox {cb_id}: {e}")
 
-    # Screenshot BEFORE submit so you can verify the form
+    # Screenshot BEFORE submit — expand window to full page height so entire form is visible
+    full_height = driver.execute_script("return document.body.scrollHeight")
+    driver.set_window_size(1280, full_height)
     pre_path = os.path.join(os.path.dirname(__file__), "pre_submit_screenshot.png")
     driver.save_screenshot(pre_path)
     print(f"Pre-submit screenshot saved to {pre_path}")
