@@ -77,61 +77,14 @@ def js_set(driver, name, value):
     )
 
 
-def select2_set(driver, wait, select_name, value):
-    """
-    Drive a Select2 widget by clicking through its UI.
-    Looks up the option text for `value` in the underlying <select>,
-    opens the dropdown by clicking the Select2 trigger, then clicks the matching option.
-    Returns True on success.
-    """
-    # Resolve option text from the hidden <select>
-    option_text = driver.execute_script(
+def select2_set(driver, name, value):
+    """Set a Select2 dropdown via jQuery's Select2 API (.val + trigger change.select2)."""
+    driver.execute_script(
         """
-        var sel = document.querySelector('select[name="' + arguments[0] + '"]');
-        if (!sel) return null;
-        var opt = Array.from(sel.options).find(function(o) { return o.value == arguments[1]; });
-        return opt ? opt.textContent.trim() : null;
+        jQuery('select[name="' + arguments[0] + '"]').val(arguments[1]).trigger('change.select2');
         """,
-        select_name, str(value)
+        name, str(value)
     )
-    if not option_text:
-        print(f"  Warning: no option value='{value}' found in select '{select_name}'")
-        return False
-
-    # Click the Select2 trigger (the span that sits next to the hidden <select>)
-    clicked = driver.execute_script(
-        """
-        var sel = document.querySelector('select[name="' + arguments[0] + '"]');
-        if (!sel) return false;
-        // Select2 appends its container right after the <select>
-        var next = sel.nextElementSibling;
-        if (next && next.classList.contains('select2-container')) {
-            var trigger = next.querySelector('.select2-selection');
-            if (trigger) { trigger.click(); return true; }
-        }
-        return false;
-        """,
-        select_name
-    )
-    if not clicked:
-        print(f"  Warning: could not find Select2 trigger for '{select_name}'")
-        return False
-
-    # Wait for the dropdown list to appear
-    try:
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, '.select2-results__option')))
-    except Exception:
-        print(f"  Warning: Select2 dropdown did not open for '{select_name}'")
-        return False
-
-    # Click the matching option
-    for opt in driver.find_elements(By.CSS_SELECTOR, '.select2-results__option'):
-        if opt.text.strip() == option_text:
-            opt.click()
-            return True
-
-    print(f"  Warning: option '{option_text}' not found in open Select2 dropdown")
-    return False
 
 
 def add_to_cart(driver, wait, amount):
@@ -173,15 +126,15 @@ def fill_checkout(driver, wait, info):
     # --- Delivery type (Select2) ---
     delivery_type = info.get("delivery_type_id", "1")
     print(f"  Setting delivery type to {delivery_type}...")
-    select2_set(driver, wait, "delivery_type_id", delivery_type)
+    select2_set(driver, "delivery_type_id", delivery_type)
     time.sleep(1)
 
-    # --- Delivery region (Select2, triggers AJAX city load) ---
+    # --- Delivery region (Select2, then explicitly call AJAX city loader) ---
     delivery_region = info.get("delivery_region", "")
     if delivery_region:
         print(f"  Setting delivery region to {delivery_region}...")
-        select2_set(driver, wait, "delivery_region", delivery_region)
-        # Wait for city dropdown to populate
+        select2_set(driver, "delivery_region", delivery_region)
+        driver.execute_script("ajaxPutDeliveryCitiesByRegion(arguments[0]);", str(delivery_region))
         print("  Waiting for cities to load...")
         try:
             wait.until(lambda d: len(
@@ -195,7 +148,7 @@ def fill_checkout(driver, wait, info):
     delivery_city = info.get("delivery_city", "")
     if delivery_city:
         print(f"  Setting delivery city to {delivery_city}...")
-        select2_set(driver, wait, "delivery_city", delivery_city)
+        select2_set(driver, "delivery_city", delivery_city)
         time.sleep(0.5)
 
     # --- Delivery contact + address fields ---
